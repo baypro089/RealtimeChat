@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Realtime Chat - Day 2</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        #messages { border: 1px solid #ccc; height: 300px; overflow-y: auto; padding: 8px; margin: 10px 0; background: #fafafa; }
+        input, button { padding: 6px; margin: 2px; }
+        #chatArea { display: none; }
+        #loginArea { border: 1px solid #ddd; padding: 12px; margin-bottom: 12px; }
+        .hint { color: #666; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <h1>Realtime Chat - Day 2</h1>
+
+    <div id="loginArea">
+        <h3>Đăng nhập</h3>
+        <input id="loginUsername" placeholder="Username (alice/bob/charlie)" value="alice" />
+        <input id="loginPassword" type="password" placeholder="Password" value="123456" />
+        <button id="loginBtn">Login</button>
+        <p class="hint">Tài khoản demo: alice / bob / charlie, password: 123456</p>
+    </div>
+
+    <div id="chatArea">
+        <div>
+            <input id="room" placeholder="Tên phòng" value="general" />
+            <button id="joinBtn">Join room</button>
+            <button id="leaveBtn">Leave room</button>
+            <button id="logoutBtn">Logout</button>
+            <span id="whoami"></span>
+        </div>
+
+        <div id="messages"></div>
+
+        <div>
+            <input id="message" placeholder="Nhập tin nhắn..." style="width: 300px;" />
+            <button id="sendBtn">Gửi</button>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
+    <script>
+        let connection = null;
+        let accessToken = null;
+
+        const loginArea = document.getElementById("loginArea");
+        const chatArea = document.getElementById("chatArea");
+        const messagesDiv = document.getElementById("messages");
+        const whoami = document.getElementById("whoami");
+        const roomInput = document.getElementById("room");
+        const messageInput = document.getElementById("message");
+
+        function appendMessage(user, message) {
+            const p = document.createElement("p");
+            p.innerHTML = `<strong>${user}:</strong> ${message}`;
+            messagesDiv.appendChild(p);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        async function login() {
+            const username = document.getElementById("loginUsername").value.trim();
+            const password = document.getElementById("loginPassword").value;
+
+            const res = await fetch("/api/auth/login", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ username, password })
+            });
+
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                alert("Login thất bại: " + (err.message || res.status));
+                return;
+            }
+
+            const data = await res.json();
+            accessToken = data.accessToken;
+            whoami.textContent = `(đăng nhập: ${data.username})`;
+
+            loginArea.style.display = "none";
+            chatArea.style.display = "block";
+
+            await connectSignalR();
+        }
+
+        async function connectSignalR() {
+            connection = new signalR.HubConnectionBuilder()
+                .withUrl("/chathub", {
+                    accessTokenFactory: () => accessToken
+                })
+                .withAutomaticReconnect([0, 2000, 5000, 10000, 30000])
+                .build();
+
+            connection.on("ReceiveMessage", (user, message) => {
+                appendMessage(user, message);
+            });
+
+            connection.onreconnecting(() => appendMessage("System", "Đang kết nối lại..."));
+            connection.onreconnected(() => appendMessage("System", "Đã kết nối lại."));
+            connection.onclose(() => appendMessage("System", "Mất kết nối."));
+
+            try {
+                await connection.start();
+                console.log("SignalR connected.");
+            } catch (err) {
+                console.error("SignalR connect error:", err);
+                alert("Không kết nối được SignalR: " + err);
+            }
+        }
+
+        document.getElementById("loginBtn").addEventListener("click", login);
+
+        document.getElementById("joinBtn").addEventListener("click", async () => {
+            const room = roomInput.value.trim();
+            if (room) await connection.invoke("JoinRoom", room);
+        });
+
+        document.getElementById("leaveBtn").addEventListener("click", async () => {
+            const room = roomInput.value.trim();
+            if (room) await connection.invoke("LeaveRoom", room);
+        });
+
+        document.getElementById("sendBtn").addEventListener("click", async () => {
+            const room = roomInput.value.trim();
+            const message = messageInput.value.trim();
+            if (room && message) {
+                await connection.invoke("SendMessageToRoom", room, message);
+                messageInput.value = "";
+            }
+        });
+
+        messageInput.addEventListener("keypress", (e) => {
+            if (e.key === "Enter") document.getElementById("sendBtn").click();
+        });
+
+        document.getElementById("logoutBtn").addEventListener("click", async () => {
+            if (connection) await connection.stop();
+            accessToken = null;
+            messagesDiv.innerHTML = "";
+            chatArea.style.display = "none";
+            loginArea.style.display = "block";
+        });
+    </script>
+</body>
+</html>
